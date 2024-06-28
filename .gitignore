@@ -162,3 +162,4 @@ cython_debug/
 #.idea/
 
 stocks.csv
+send_message.sh
