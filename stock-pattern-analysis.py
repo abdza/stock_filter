@@ -20,6 +20,8 @@ def get_stock_data(ticker, timeframe='1d', end_date=datetime.now(), days=50):
 
     start_date = end_date - timedelta(days=days)
     data = yf.download(ticker, start=start_date, end=end_date, interval=interval)
+    if not data.empty and len(data) >= 20:
+        data['MA20'] = data['Close'].rolling(window=20).mean()
     return data
 
 def identify_doji(open_price, close_price, high, low, doji_threshold=0.1):
@@ -62,10 +64,9 @@ def identify_reversal_pattern(data, today_only):
     return None
 
 def identify_ma_breakout_pattern(data, today_only):
-    if len(data) < 25:
+    if len(data) < 25 or 'MA20' not in data.columns:
         return None
     
-    data['MA20'] = data['Close'].rolling(window=20).mean()
     current_date = data.index[-1].date()
     
     for i in range(len(data) - 1, 20, -1):
@@ -97,15 +98,23 @@ def identify_ma_breakout_pattern(data, today_only):
     
     return None
 
+def get_latest_price(ticker):
+    stock = yf.Ticker(ticker)
+    todays_data = stock.history(period='1d')
+    if not todays_data.empty:
+        return todays_data['Close'].iloc[-1]
+    return None
+
 def get_tradingview_link(ticker):
     return f"https://www.tradingview.com/chart/?symbol={ticker}"
 
 async def send_telegram_message(bot_token, chat_id, patterns_found):
     bot = Bot(token=bot_token)
-    message = "Patterns found:\n\n"
-    for ticker, _, pattern_type in patterns_found:
+    message = "Patterns found (sorted by price):\n\n"
+    for ticker, price, pattern_type in patterns_found:
         tv_link = get_tradingview_link(ticker)
-        message += f"{ticker}: {pattern_type}\n{tv_link}\n\n"
+        price_str = f"${price:.2f}" if price is not None else "N/A"
+        message += f"{ticker} ({price_str}): {pattern_type}\n{tv_link}\n\n"
     await bot.send_message(chat_id=chat_id, text=message, disable_web_page_preview=True)
 
 def main(timeframe, today_only, telegram_token, telegram_chat_id):
@@ -129,13 +138,15 @@ def main(timeframe, today_only, telegram_token, telegram_chat_id):
             reversal_result = identify_reversal_pattern(data, today_only)
             if reversal_result is not None:
                 pattern, candle_type = reversal_result
-                patterns_found.append((ticker, pattern, candle_type))
+                latest_price = get_latest_price(ticker)
+                patterns_found.append((ticker, latest_price, candle_type))
                 print(f"{candle_type} reversal pattern found for {ticker}")
             
             ma_result = identify_ma_breakout_pattern(data, today_only)
             if ma_result is not None:
                 pattern, pattern_type = ma_result
-                patterns_found.append((ticker, pattern, pattern_type))
+                latest_price = get_latest_price(ticker)
+                patterns_found.append((ticker, latest_price, pattern_type))
                 print(f"{pattern_type} found for {ticker}")
             
             if reversal_result is None and ma_result is None:
@@ -144,23 +155,31 @@ def main(timeframe, today_only, telegram_token, telegram_chat_id):
         except Exception as e:
             print(f"Error processing {ticker}: {str(e)}")
     
-    # Sort patterns_found, putting pending confirmation patterns last
-    patterns_found.sort(key=lambda x: "Pending Confirmation" in x[2])
+    # Sort patterns_found by price (descending) and then by pattern type
+    patterns_found.sort(key=lambda x: (-x[1] if x[1] is not None else float('-inf'), "Pending Confirmation" in x[2]))
     
     filter_description = "today only" if today_only else "last month"
     print(f"\nPatterns found (Timeframe: {timeframe}, Filter: {filter_description}):")
-    for ticker, pattern, pattern_type in patterns_found:
-        print(f"\n{ticker} - {pattern_type}:")
+    for ticker, price, pattern_type in patterns_found:
+        price_str = f"${price:.2f}" if price is not None else "N/A"
+        print(f"\n{ticker} ({price_str}) - {pattern_type}:")
         if "MA Breakout and Retest" in pattern_type:
             print("Breakout and Retest candles:")
-            print(pattern[['Open', 'High', 'Low', 'Close', 'Volume', 'MA20']])
-            if "Pending Confirmation" in pattern_type:
-                print("Waiting for confirmation candle")
+            data = get_stock_data(ticker, timeframe)
+            if 'MA20' in data.columns:
+                if "Pending Confirmation" in pattern_type:
+                    print(data.iloc[-2:][['Open', 'High', 'Low', 'Close', 'Volume', 'MA20']])
+                    print("Waiting for confirmation candle")
+                else:
+                    print(data.iloc[-3:][['Open', 'High', 'Low', 'Close', 'Volume', 'MA20']])
+            else:
+                print("MA20 data not available")
         else:
-            print(pattern[['Open', 'High', 'Low', 'Close', 'Volume']])
+            data = get_stock_data(ticker, timeframe)
+            print(data.iloc[-5:][['Open', 'High', 'Low', 'Close', 'Volume']])
         if pattern_type in ['Doji', 'Hammer']:
-            print(f"Last period volume: {pattern['Volume'].iloc[-1]:.0f}")
-            print(f"Average volume of previous 4 periods: {pattern['Volume'].iloc[:-1].mean():.0f}")
+            print(f"Last period volume: {data['Volume'].iloc[-1]:.0f}")
+            print(f"Average volume of previous 4 periods: {data['Volume'].iloc[-5:-1].mean():.0f}")
     
     if telegram_token and telegram_chat_id:
         asyncio.run(send_telegram_message(telegram_token, telegram_chat_id, patterns_found))
