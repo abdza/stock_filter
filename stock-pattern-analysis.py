@@ -53,7 +53,7 @@ def identify_reversal_pattern(data, today_only):
             continue
         
         avg_volume = data['Volume'].iloc[i-5:i].mean()
-        if day['Volume'] <= avg_volume:
+        if day['Volume'] <= 3 * avg_volume:
             continue
         
         if today_only and i != len(data) - 1:
@@ -110,11 +110,11 @@ def get_tradingview_link(ticker):
 
 async def send_telegram_message(bot_token, chat_id, patterns_found):
     bot = Bot(token=bot_token)
-    message = "Patterns found (sorted by price):\n\n"
-    for ticker, price, pattern_type in patterns_found:
+    message = f"Patterns found: {len(patterns_found)}\n\n"
+    for i, (ticker, price, pattern_type) in enumerate(patterns_found, 1):
         tv_link = get_tradingview_link(ticker)
         price_str = f"${price:.2f}" if price is not None else "N/A"
-        message += f"{ticker} ({price_str}): {pattern_type}\n{tv_link}\n\n"
+        message += f"{i}. {ticker} ({price_str}): {pattern_type}\n{tv_link}\n\n"
     await bot.send_message(chat_id=chat_id, text=message, disable_web_page_preview=True)
 
 def main(timeframe, today_only, telegram_token, telegram_chat_id):
@@ -159,10 +159,10 @@ def main(timeframe, today_only, telegram_token, telegram_chat_id):
     patterns_found.sort(key=lambda x: (-x[1] if x[1] is not None else float('-inf'), "Pending Confirmation" in x[2]))
     
     filter_description = "today only" if today_only else "last month"
-    print(f"\nPatterns found (Timeframe: {timeframe}, Filter: {filter_description}):")
-    for ticker, price, pattern_type in patterns_found:
+    print(f"\nPatterns found: {len(patterns_found)} (Timeframe: {timeframe}, Filter: {filter_description}):")
+    for i, (ticker, price, pattern_type) in enumerate(patterns_found, 1):
         price_str = f"${price:.2f}" if price is not None else "N/A"
-        print(f"\n{ticker} ({price_str}) - {pattern_type}:")
+        print(f"\n{i}. {ticker} ({price_str}) - {pattern_type}:")
         if "MA Breakout and Retest" in pattern_type:
             print("Breakout and Retest candles:")
             data = get_stock_data(ticker, timeframe)
