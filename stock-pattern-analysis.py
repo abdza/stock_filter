@@ -11,7 +11,7 @@ import argparse
 import asyncio
 from telegram import Bot
 
-def get_stock_data(ticker, timeframe='1d', end_date=datetime.now(), days=50):
+def get_stock_data(ticker, timeframe='1d', end_date=datetime.now(), days=365):  # Increased to 365 days
     if timeframe == '5m':
         days = min(days, 7)
         interval = '5m'
@@ -20,8 +20,9 @@ def get_stock_data(ticker, timeframe='1d', end_date=datetime.now(), days=50):
 
     start_date = end_date - timedelta(days=days)
     data = yf.download(ticker, start=start_date, end=end_date, interval=interval)
-    if not data.empty and len(data) >= 20:
+    if not data.empty and len(data) >= 200:
         data['MA20'] = data['Close'].rolling(window=20).mean()
+        data['MA200'] = data['Close'].rolling(window=200).mean()
     return data
 
 def identify_doji(open_price, close_price, high, low, doji_threshold=0.1):
@@ -41,7 +42,8 @@ def identify_reversal_pattern(data, today_only):
     
     data['Returns'] = data['Close'].pct_change()
     
-    for i in range(len(data) - 1, 3, -1):
+    start_index = len(data) - 4 if today_only else 4
+    for i in range(len(data) - 1, start_index - 1, -1):
         if sum(data['Returns'].iloc[i-4:i] < 0) < 3:
             continue
         
@@ -56,21 +58,24 @@ def identify_reversal_pattern(data, today_only):
         if day['Volume'] <= 3 * avg_volume:
             continue
         
-        if today_only and i != len(data) - 1:
-            continue
-        
         return data.iloc[i-4:i+1], "Doji" if is_doji else "Hammer"
     
     return None
 
 def identify_ma_breakout_pattern(data, today_only):
-    if len(data) < 25 or 'MA20' not in data.columns:
+    if len(data) < 200 or 'MA20' not in data.columns or 'MA200' not in data.columns:
         return None
     
     current_date = data.index[-1].date()
     
+    data['CandleSize'] = data['High'] - data['Low']
+    avg_candle_size = data['CandleSize'].rolling(window=20).mean()
+    
     for i in range(len(data) - 1, 20, -1):
         if data['Close'].iloc[i-1] <= data['MA20'].iloc[i-1] and data['Close'].iloc[i] > data['MA20'].iloc[i]:
+            if data['CandleSize'].iloc[i] < 2 * avg_candle_size.iloc[i]:
+                continue
+            
             breakout_index = i
             
             for j in range(breakout_index + 1, len(data)):
@@ -79,19 +84,28 @@ def identify_ma_breakout_pattern(data, today_only):
                 if data['Low'].iloc[j] - data['MA20'].iloc[j] < data['Close'].iloc[j] * 0.01:
                     test_index = j
                     
-                    # Check if the retest candle is at least a day old
                     if (current_date - data.index[test_index].date()).days < 1:
                         break
                     
                     for k in range(test_index + 1, len(data)):
                         if data['Close'].iloc[k] > data['Open'].iloc[k] and data['High'].iloc[k] > data['High'].iloc[test_index]:
-                            if today_only and k != len(data) - 1:
+                            if today_only and k < len(data) - 4:
                                 break
-                            return data.iloc[[breakout_index, test_index, k]], "MA Breakout and Retest"
+                            
+                            ma20_above_ma200 = data['MA20'].iloc[k] > data['MA200'].iloc[k]
+                            ma_converging = abs(data['MA20'].iloc[k] - data['MA200'].iloc[k]) < abs(data['MA20'].iloc[k-1] - data['MA200'].iloc[k-1])
+                            
+                            ma_info = f"MA20 {'above' if ma20_above_ma200 else 'below'} MA200, {'converging' if ma_converging else 'diverging'}"
+                            
+                            return data.iloc[[breakout_index, test_index, k]], f"MA Breakout and Retest ({ma_info})"
                     
-                    # If we reach here, we have a breakout and retest, but no confirmation yet
-                    if not today_only or test_index == len(data) - 1:
-                        return data.iloc[[breakout_index, test_index]], "MA Breakout and Retest (Pending Confirmation)"
+                    if not today_only or test_index >= len(data) - 4:
+                        ma20_above_ma200 = data['MA20'].iloc[test_index] > data['MA200'].iloc[test_index]
+                        ma_converging = abs(data['MA20'].iloc[test_index] - data['MA200'].iloc[test_index]) < abs(data['MA20'].iloc[test_index-1] - data['MA200'].iloc[test_index-1])
+                        
+                        ma_info = f"MA20 {'above' if ma20_above_ma200 else 'below'} MA200, {'converging' if ma_converging else 'diverging'}"
+                        
+                        return data.iloc[[breakout_index, test_index]], f"MA Breakout and Retest (Pending Confirmation, {ma_info})"
                     
                     break
             break
@@ -155,10 +169,9 @@ def main(timeframe, today_only, telegram_token, telegram_chat_id):
         except Exception as e:
             print(f"Error processing {ticker}: {str(e)}")
     
-    # Sort patterns_found by price (descending) and then by pattern type
     patterns_found.sort(key=lambda x: (-x[1] if x[1] is not None else float('-inf'), "Pending Confirmation" in x[2]))
     
-    filter_description = "today only" if today_only else "last month"
+    filter_description = "last 3 days" if today_only else "last month"
     print(f"\nPatterns found: {len(patterns_found)} (Timeframe: {timeframe}, Filter: {filter_description}):")
     for i, (ticker, price, pattern_type) in enumerate(patterns_found, 1):
         price_str = f"${price:.2f}" if price is not None else "N/A"
@@ -166,14 +179,14 @@ def main(timeframe, today_only, telegram_token, telegram_chat_id):
         if "MA Breakout and Retest" in pattern_type:
             print("Breakout and Retest candles:")
             data = get_stock_data(ticker, timeframe)
-            if 'MA20' in data.columns:
+            if 'MA20' in data.columns and 'MA200' in data.columns:
                 if "Pending Confirmation" in pattern_type:
-                    print(data.iloc[-2:][['Open', 'High', 'Low', 'Close', 'Volume', 'MA20']])
+                    print(data.iloc[-2:][['Open', 'High', 'Low', 'Close', 'Volume', 'MA20', 'MA200']])
                     print("Waiting for confirmation candle")
                 else:
-                    print(data.iloc[-3:][['Open', 'High', 'Low', 'Close', 'Volume', 'MA20']])
+                    print(data.iloc[-3:][['Open', 'High', 'Low', 'Close', 'Volume', 'MA20', 'MA200']])
             else:
-                print("MA20 data not available")
+                print("MA data not available")
         else:
             data = get_stock_data(ticker, timeframe)
             print(data.iloc[-5:][['Open', 'High', 'Low', 'Close', 'Volume']])
@@ -190,7 +203,7 @@ if __name__ == "__main__":
     parser.add_argument("-t", "--timeframe", choices=['1d', '5m'], default='1d', 
                         help="Timeframe for analysis: '1d' for daily (default), '5m' for 5-minute")
     parser.add_argument("-a", "--all", action="store_true", 
-                        help="Show patterns from the last month (default is today only)")
+                        help="Show patterns from the last month (default is last 3 days)")
     parser.add_argument("--telegram_token", help="Telegram Bot Token for sending results")
     parser.add_argument("--telegram_chat_id", help="Telegram Chat ID for sending results")
     args = parser.parse_args()
