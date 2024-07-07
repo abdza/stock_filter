@@ -11,8 +11,11 @@ import argparse
 import asyncio
 from telegram import Bot
 
-def get_stock_data(ticker, timeframe='1d', end_date=datetime.now(), days=365):  # Increased to 365 days
-    if timeframe == '5m':
+def get_stock_data(ticker, timeframe='1d', end_date=datetime.now(), days=365):
+    if timeframe == '15m':
+        days = min(days, 60)  # yfinance limitation for 15m data
+        interval = '15m'
+    elif timeframe == '5m':
         days = min(days, 7)
         interval = '5m'
     else:
@@ -112,6 +115,25 @@ def identify_ma_breakout_pattern(data, today_only):
     
     return None
 
+def identify_morning_panic(data):
+    if len(data) < 2 * 26:  # We need at least two trading days of 15-minute data
+        return None
+    
+    data['CandleSize'] = data['High'] - data['Low']
+    avg_candle_size = data['CandleSize'].rolling(window=26).mean()  # Average over one trading day
+    
+    for i in range(len(data) - 26, 26, -26):  # Check each day
+        yesterday = data.iloc[i-26:i]
+        today_first_candle = data.iloc[i]
+        
+        if (yesterday['Close'].iloc[-1] < yesterday['Open'].iloc[0] and  # Yesterday was bearish
+            today_first_candle['Close'] > today_first_candle['Open'] and  # Today's first candle is bullish
+            today_first_candle['CandleSize'] > 5 * avg_candle_size.iloc[i]):  # Today's first candle is large
+            
+            return data.iloc[i-26:i+1], "Morning Panic"
+    
+    return None
+
 def get_latest_price(ticker):
     stock = yf.Ticker(ticker)
     todays_data = stock.history(period='1d')
@@ -131,7 +153,7 @@ async def send_telegram_message(bot_token, chat_id, patterns_found):
         message += f"{i}. {ticker} ({price_str}): {pattern_type}\n{tv_link}\n\n"
     await bot.send_message(chat_id=chat_id, text=message, disable_web_page_preview=True)
 
-def main(timeframe, today_only, telegram_token, telegram_chat_id):
+def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_id):
     csv_file = 'stocks.csv'
     if not os.path.exists(csv_file):
         print(f"Error: {csv_file} not found in the current directory.")
@@ -149,22 +171,33 @@ def main(timeframe, today_only, telegram_token, telegram_chat_id):
         try:
             data = get_stock_data(ticker, timeframe)
             
-            reversal_result = identify_reversal_pattern(data, today_only)
-            if reversal_result is not None:
-                pattern, candle_type = reversal_result
-                latest_price = get_latest_price(ticker)
-                patterns_found.append((ticker, latest_price, candle_type))
-                print(f"{candle_type} reversal pattern found for {ticker}")
+            if 'reversal' in patterns_to_find:
+                reversal_result = identify_reversal_pattern(data, today_only)
+                if reversal_result is not None:
+                    pattern, candle_type = reversal_result
+                    latest_price = get_latest_price(ticker)
+                    patterns_found.append((ticker, latest_price, candle_type))
+                    print(f"{candle_type} reversal pattern found for {ticker}")
             
-            ma_result = identify_ma_breakout_pattern(data, today_only)
-            if ma_result is not None:
-                pattern, pattern_type = ma_result
-                latest_price = get_latest_price(ticker)
-                patterns_found.append((ticker, latest_price, pattern_type))
-                print(f"{pattern_type} found for {ticker}")
+            if 'ma_breakout' in patterns_to_find:
+                ma_result = identify_ma_breakout_pattern(data, today_only)
+                if ma_result is not None:
+                    pattern, pattern_type = ma_result
+                    latest_price = get_latest_price(ticker)
+                    patterns_found.append((ticker, latest_price, pattern_type))
+                    print(f"{pattern_type} found for {ticker}")
             
-            if reversal_result is None and ma_result is None:
-                print(f"No pattern found for {ticker}")
+            if 'morning_panic' in patterns_to_find:
+                morning_panic_data = get_stock_data(ticker, '15m', days=5)
+                morning_panic_result = identify_morning_panic(morning_panic_data)
+                if morning_panic_result is not None:
+                    pattern, pattern_type = morning_panic_result
+                    latest_price = get_latest_price(ticker)
+                    patterns_found.append((ticker, latest_price, pattern_type))
+                    print(f"{pattern_type} found for {ticker}")
+            
+            if not any(pattern in patterns_to_find for pattern in ['reversal', 'ma_breakout', 'morning_panic']):
+                print(f"No specified patterns found for {ticker}")
         
         except Exception as e:
             print(f"Error processing {ticker}: {str(e)}")
@@ -187,6 +220,10 @@ def main(timeframe, today_only, telegram_token, telegram_chat_id):
                     print(data.iloc[-3:][['Open', 'High', 'Low', 'Close', 'Volume', 'MA20', 'MA200']])
             else:
                 print("MA data not available")
+        elif pattern_type == "Morning Panic":
+            print("Morning Panic candles:")
+            data = get_stock_data(ticker, '15m', days=5)
+            print(data.iloc[-52:][['Open', 'High', 'Low', 'Close', 'Volume']])
         else:
             data = get_stock_data(ticker, timeframe)
             print(data.iloc[-5:][['Open', 'High', 'Low', 'Close', 'Volume']])
@@ -204,8 +241,11 @@ if __name__ == "__main__":
                         help="Timeframe for analysis: '1d' for daily (default), '5m' for 5-minute")
     parser.add_argument("-a", "--all", action="store_true", 
                         help="Show patterns from the last month (default is last 3 days)")
+    parser.add_argument("-p", "--patterns", nargs='+', choices=['reversal', 'ma_breakout', 'morning_panic'],
+                        default=['reversal', 'ma_breakout', 'morning_panic'],
+                        help="Specify patterns to look for (default: all patterns)")
     parser.add_argument("--telegram_token", help="Telegram Bot Token for sending results")
     parser.add_argument("--telegram_chat_id", help="Telegram Chat ID for sending results")
     args = parser.parse_args()
 
-    main(args.timeframe, not args.all, args.telegram_token, args.telegram_chat_id)
+    main(args.timeframe, not args.all, args.patterns, args.telegram_token, args.telegram_chat_id)
