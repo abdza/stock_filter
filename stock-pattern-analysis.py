@@ -236,6 +236,47 @@ def identify_green_after_long_red(data, today_only, min_red_candles=3):
     return None
 
 
+def identify_extreme_volume_spike(data, today_only, threshold=5):
+    if len(data) < 20:  # We need at least 20 days of data for a reliable average
+        return None
+
+    data["AvgVolume"] = data["Volume"].rolling(window=20).mean()
+    data["VolumeRatio"] = data["Volume"] / data["AvgVolume"]
+
+    start_index = len(data) - 3 if today_only else 0
+    for i in range(len(data) - 1, start_index - 1, -1):
+        if data["VolumeRatio"].iloc[i] >= threshold:
+            return (
+                data.iloc[i - 1 : i + 1],
+                f"Extreme Volume Spike ({data['VolumeRatio'].iloc[i]:.2f}x)",
+            )
+
+    return None
+
+
+def identify_sustained_volume_increase(data, today_only, threshold=3, days=3):
+    if (
+        len(data) < 20 + days
+    ):  # We need at least 20 days of data for a reliable average, plus the days for sustained increase
+        return None
+
+    data["AvgVolume"] = data["Volume"].rolling(window=20).mean()
+    data["VolumeRatio"] = data["Volume"] / data["AvgVolume"]
+
+    start_index = len(data) - 3 if today_only else days
+    for i in range(len(data) - 1, start_index - 1, -1):
+        if all(data["VolumeRatio"].iloc[i - days + 1 : i + 1] >= threshold) and all(
+            data["VolumeRatio"].iloc[i - days + 1 : i + 1]
+            > data["VolumeRatio"].iloc[i - days : i]
+        ):
+            return (
+                data.iloc[i - days + 1 : i + 1],
+                f"Sustained Volume Increase ({data['VolumeRatio'].iloc[i]:.2f}x)",
+            )
+
+    return None
+
+
 def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_id):
     csv_file = "stocks.csv"
     if not os.path.exists(csv_file):
@@ -287,6 +328,24 @@ def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_
                     patterns_found.append((ticker, latest_price, pattern_type, pattern))
                     print(f"{pattern_type} found for {ticker}")
 
+            if "extreme_volume_spike" in patterns_to_find:
+                extreme_volume_result = identify_extreme_volume_spike(data, today_only)
+                if extreme_volume_result is not None:
+                    pattern, pattern_type = extreme_volume_result
+                    latest_price = get_latest_price(ticker)
+                    patterns_found.append((ticker, latest_price, pattern_type, pattern))
+                    print(f"{pattern_type} found for {ticker}")
+
+            if "sustained_volume_increase" in patterns_to_find:
+                sustained_volume_result = identify_sustained_volume_increase(
+                    data, today_only
+                )
+                if sustained_volume_result is not None:
+                    pattern, pattern_type = sustained_volume_result
+                    latest_price = get_latest_price(ticker)
+                    patterns_found.append((ticker, latest_price, pattern_type, pattern))
+                    print(f"{pattern_type} found for {ticker}")
+
             if not any(
                 pattern in patterns_to_find
                 for pattern in [
@@ -294,6 +353,8 @@ def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_
                     "ma_breakout",
                     "morning_panic",
                     "green_after_long_red",
+                    "extreme_volume_spike",
+                    "sustained_volume_increase",
                 ]
             ):
                 print(f"No specified patterns found for {ticker}")
@@ -318,7 +379,6 @@ def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_
         data = pattern
         if "MA Breakout and Retest" in pattern_type:
             print("Breakout and Retest candles:")
-            # data = get_stock_data(ticker, timeframe)
             if "MA20" in data.columns and "MA200" in data.columns:
                 if "Pending Confirmation" in pattern_type:
                     print(
@@ -337,14 +397,29 @@ def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_
                 print("MA data not available")
         elif pattern_type == "Morning Panic":
             print("Morning Panic candles:")
-            # data = get_stock_data(ticker, "15m", days=5)
             print(data.iloc[-52:][["Open", "High", "Low", "Close", "Volume"]])
         elif pattern_type == "Green After Long Red":
             print("Green After Long Red candles:")
-            # data = get_stock_data(ticker, timeframe)
             print(data.iloc[-4:][["Open", "High", "Low", "Close", "Volume"]])
+        elif (
+            "Extreme Volume Spike" in pattern_type
+            or "Sustained Volume Increase" in pattern_type
+        ):
+            print(f"{pattern_type} candles:")
+            print(
+                data[
+                    [
+                        "Open",
+                        "High",
+                        "Low",
+                        "Close",
+                        "Volume",
+                        "AvgVolume",
+                        "VolumeRatio",
+                    ]
+                ]
+            )
         else:
-            # data = get_stock_data(ticker, timeframe)
             print(data.iloc[-5:][["Open", "High", "Low", "Close", "Volume"]])
         if pattern_type in ["Doji", "Hammer"]:
             print(f"Last period volume: {data['Volume'].iloc[-1]:.0f}")
@@ -378,8 +453,22 @@ if __name__ == "__main__":
         "-p",
         "--patterns",
         nargs="+",
-        choices=["reversal", "ma_breakout", "morning_panic", "green_after_long_red"],
-        default=["reversal", "ma_breakout", "morning_panic", "green_after_long_red"],
+        choices=[
+            "reversal",
+            "ma_breakout",
+            "morning_panic",
+            "green_after_long_red",
+            "extreme_volume_spike",
+            "sustained_volume_increase",
+        ],
+        default=[
+            "reversal",
+            "ma_breakout",
+            "morning_panic",
+            "green_after_long_red",
+            "extreme_volume_spike",
+            "sustained_volume_increase",
+        ],
         help="Specify patterns to look for (default: all patterns)",
     )
     parser.add_argument(
