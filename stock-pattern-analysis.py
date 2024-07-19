@@ -188,13 +188,24 @@ def get_tradingview_link(ticker):
     return f"https://www.tradingview.com/chart/?symbol={ticker}"
 
 
+def get_stock_float(ticker):
+    try:
+        stock = yf.Ticker(ticker)
+        return stock.info.get("floatShares")
+    except:
+        return None
+
+
 async def send_telegram_message(bot_token, chat_id, patterns_found):
     bot = Bot(token=bot_token)
     message = f"Patterns found: {len(patterns_found)}\n\n"
-    for i, (ticker, price, pattern_type, pattern) in enumerate(patterns_found, 1):
+    for i, (ticker, price, pattern_type, pattern, float_shares) in enumerate(
+        patterns_found, 1
+    ):
         tv_link = get_tradingview_link(ticker)
         price_str = f"${price:.2f}" if price is not None else "N/A"
-        message += f"{i}. {ticker} ({price_str}): {pattern_type}\n{tv_link}\n\n"
+        float_str = f"{float_shares:,}" if float_shares is not None else "N/A"
+        message += f"{i}. {ticker} ({price_str}): {pattern_type}\nFloat: {float_str}\n{tv_link}\n\n"
         if not i % 20:
             await bot.send_message(
                 chat_id=chat_id, text=message, disable_web_page_preview=True
@@ -294,13 +305,16 @@ def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_
         print(f"Analyzing {ticker}...")
         try:
             data = get_stock_data(ticker, timeframe)
+            float_shares = get_stock_float(ticker)
 
             if "reversal" in patterns_to_find:
                 reversal_result = identify_reversal_pattern(data, today_only)
                 if reversal_result is not None:
                     pattern, candle_type = reversal_result
                     latest_price = get_latest_price(ticker)
-                    patterns_found.append((ticker, latest_price, candle_type, pattern))
+                    patterns_found.append(
+                        (ticker, latest_price, candle_type, pattern, float_shares)
+                    )
                     print(f"{candle_type} reversal pattern found for {ticker}")
 
             if "ma_breakout" in patterns_to_find:
@@ -308,7 +322,9 @@ def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_
                 if ma_result is not None:
                     pattern, pattern_type = ma_result
                     latest_price = get_latest_price(ticker)
-                    patterns_found.append((ticker, latest_price, pattern_type, pattern))
+                    patterns_found.append(
+                        (ticker, latest_price, pattern_type, pattern, float_shares)
+                    )
                     print(f"{pattern_type} found for {ticker}")
 
             if "morning_panic" in patterns_to_find:
@@ -317,7 +333,9 @@ def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_
                 if morning_panic_result is not None:
                     pattern, pattern_type = morning_panic_result
                     latest_price = get_latest_price(ticker)
-                    patterns_found.append((ticker, latest_price, pattern_type, pattern))
+                    patterns_found.append(
+                        (ticker, latest_price, pattern_type, pattern, float_shares)
+                    )
                     print(f"{pattern_type} found for {ticker}")
 
             if "green_after_long_red" in patterns_to_find:
@@ -325,7 +343,9 @@ def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_
                 if green_after_red_result is not None:
                     pattern, pattern_type = green_after_red_result
                     latest_price = get_latest_price(ticker)
-                    patterns_found.append((ticker, latest_price, pattern_type, pattern))
+                    patterns_found.append(
+                        (ticker, latest_price, pattern_type, pattern, float_shares)
+                    )
                     print(f"{pattern_type} found for {ticker}")
 
             if "extreme_volume_spike" in patterns_to_find:
@@ -333,7 +353,9 @@ def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_
                 if extreme_volume_result is not None:
                     pattern, pattern_type = extreme_volume_result
                     latest_price = get_latest_price(ticker)
-                    patterns_found.append((ticker, latest_price, pattern_type, pattern))
+                    patterns_found.append(
+                        (ticker, latest_price, pattern_type, pattern, float_shares)
+                    )
                     print(f"{pattern_type} found for {ticker}")
 
             if "sustained_volume_increase" in patterns_to_find:
@@ -343,7 +365,9 @@ def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_
                 if sustained_volume_result is not None:
                     pattern, pattern_type = sustained_volume_result
                     latest_price = get_latest_price(ticker)
-                    patterns_found.append((ticker, latest_price, pattern_type, pattern))
+                    patterns_found.append(
+                        (ticker, latest_price, pattern_type, pattern, float_shares)
+                    )
                     print(f"{pattern_type} found for {ticker}")
 
             if not any(
@@ -373,9 +397,13 @@ def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_
     print(
         f"\nPatterns found: {len(patterns_found)} (Timeframe: {timeframe}, Filter: {filter_description}):"
     )
-    for i, (ticker, price, pattern_type, pattern) in enumerate(patterns_found, 1):
+    for i, (ticker, price, pattern_type, pattern, float_shares) in enumerate(
+        patterns_found, 1
+    ):
         price_str = f"${price:.2f}" if price is not None else "N/A"
+        float_str = f"{float_shares:,}" if float_shares is not None else "N/A"
         print(f"\n{i}. {ticker} ({price_str}) - {pattern_type}:")
+        print(f"Float: {float_str}")
         data = pattern
         if "MA Breakout and Retest" in pattern_type:
             print("Breakout and Retest candles:")
