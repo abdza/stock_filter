@@ -205,7 +205,13 @@ async def send_telegram_message(bot_token, chat_id, patterns_found):
         tv_link = get_tradingview_link(ticker)
         price_str = f"${price:.2f}" if price is not None else "N/A"
         float_str = f"{float_shares:,}" if float_shares is not None else "N/A"
-        message += f"{i}. {ticker} ({price_str}): {pattern_type}\nFloat: {float_str}\n{tv_link}\n\n"
+
+        if "Green After" in pattern_type:
+            red_days = pattern_type.split(" ")[2]
+            message += f"{i}. {ticker} ({price_str}): {pattern_type} Days\nFloat: {float_str}\n{tv_link}\n\n"
+        else:
+            message += f"{i}. {ticker} ({price_str}): {pattern_type}\nFloat: {float_str}\n{tv_link}\n\n"
+
         if not i % 20:
             await bot.send_message(
                 chat_id=chat_id, text=message, disable_web_page_preview=True
@@ -234,15 +240,20 @@ def identify_green_after_long_red(data, today_only, min_red_candles=3):
         if today_only and i < len(data) - 2:
             continue
 
-        # Check for continuous red candles before the green one
-        red_candles = data.iloc[i - min_red_candles : i]
-        if all(red_candles["Close"] < red_candles["Open"]):
+        # Count the number of consecutive red candles
+        red_candle_count = 0
+        for j in range(i-1, -1, -1):
+            if data["Close"].iloc[j] >= data["Open"].iloc[j]:
+                break
+            red_candle_count += 1
+
+        if red_candle_count >= min_red_candles:
             # Check if the green candle closes above the last red candle
             if (
-                data["Close"].iloc[i] > red_candles["Open"].iloc[-1]
+                data["Close"].iloc[i] > data["Open"].iloc[i-1]
                 and data["CandleSize"].iloc[i] > avg_candle_size.iloc[i]
             ):
-                return data.iloc[i - min_red_candles : i + 1], "Green After Long Red"
+                return data.iloc[i-red_candle_count:i+1], f"Green After {red_candle_count} Red"
 
     return None
 
