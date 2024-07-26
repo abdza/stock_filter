@@ -334,6 +334,28 @@ def identify_waking_giant(data, days=3, volume_threshold=5):
     return None
 
 
+def identify_big_bullish_candles(data, today_only, threshold=3):
+    if len(data) < 20:  # We need at least 20 days of data for a reliable average
+        return None
+
+    data["body_size"] = abs(data["Close"] - data["Open"])
+    data["avg_body_size"] = data["body_size"].rolling(window=20).mean()
+    data["body_size_ratio"] = data["body_size"] / data["avg_body_size"]
+
+    start_index = len(data) - 3 if today_only else 0
+    for i in range(len(data) - 1, start_index - 1, -1):
+        if (
+            data["Close"].iloc[i] > data["Open"].iloc[i]
+            and data["body_size_ratio"].iloc[i] >= threshold
+        ):
+            return (
+                data.iloc[i : i + 1],  # Return only the big bullish candle
+                f"Big Bullish Candle ({data['body_size_ratio'].iloc[i]:.2f}x average body size)",
+            )
+
+    return None
+
+
 def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_id):
     csv_file = "stocks.csv"
     if not os.path.exists(csv_file):
@@ -439,6 +461,17 @@ def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_
                     )
                     print(f"{pattern_type} found for {ticker}")
 
+            if "big_bullish_candles" in patterns_to_find:
+                big_bullish_result = identify_big_bullish_candles(data, today_only)
+                if big_bullish_result is not None:
+                    pattern, pattern_type = big_bullish_result
+                    latest_price = get_latest_price(ticker)
+                    float_shares = get_stock_float(ticker)
+                    patterns_found.append(
+                        (ticker, latest_price, pattern_type, pattern, float_shares)
+                    )
+                    print(f"{pattern_type} found for {ticker}")
+
             if not any(
                 pattern in patterns_to_find
                 for pattern in [
@@ -449,6 +482,7 @@ def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_
                     "extreme_volume_spike",
                     "sustained_volume_increase",
                     "waking_giant",
+                    "big_bullish_candles",
                 ]
             ):
                 print(f"No specified patterns found for {ticker}")
@@ -559,6 +593,7 @@ if __name__ == "__main__":
             "extreme_volume_spike",
             "sustained_volume_increase",
             "waking_giant",
+            "big_bullish_candles",
         ],
         default=[
             "reversal",
@@ -568,6 +603,7 @@ if __name__ == "__main__":
             "extreme_volume_spike",
             "sustained_volume_increase",
             "waking_giant",
+            "big_bullish_candles",
         ],
         help="Specify patterns to look for (default: all patterns)",
     )
