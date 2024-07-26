@@ -26,6 +26,8 @@ def get_stock_data(ticker, timeframe="1d", end_date=datetime.now(), days=365):
     if not data.empty and len(data) >= 200:
         data["MA20"] = data["Close"].rolling(window=20).mean()
         data["MA200"] = data["Close"].rolling(window=200).mean()
+        data["body_range"] = abs(data["Close"] - data["Open"])
+        data["candle_range"] = abs(data["High"] - data["Low"])
     return data
 
 
@@ -242,7 +244,7 @@ def identify_green_after_long_red(data, today_only, min_red_candles=3):
 
         # Count the number of consecutive red candles
         red_candle_count = 0
-        for j in range(i-1, -1, -1):
+        for j in range(i - 1, -1, -1):
             if data["Close"].iloc[j] >= data["Open"].iloc[j]:
                 break
             red_candle_count += 1
@@ -250,10 +252,13 @@ def identify_green_after_long_red(data, today_only, min_red_candles=3):
         if red_candle_count >= min_red_candles:
             # Check if the green candle closes above the last red candle
             if (
-                data["Close"].iloc[i] > data["Open"].iloc[i-1]
+                data["Close"].iloc[i] > data["Open"].iloc[i - 1]
                 and data["CandleSize"].iloc[i] > avg_candle_size.iloc[i]
             ):
-                return data.iloc[i-red_candle_count:i+1], f"Green After {red_candle_count} Red"
+                return (
+                    data.iloc[i - red_candle_count : i + 1],
+                    f"Green After {red_candle_count} Red",
+                )
 
     return None
 
@@ -268,10 +273,18 @@ def identify_extreme_volume_spike(data, today_only, threshold=5):
     start_index = len(data) - 3 if today_only else 0
     for i in range(len(data) - 1, start_index - 1, -1):
         if data["VolumeRatio"].iloc[i] >= threshold:
-            return (
-                data.iloc[i - 1 : i + 1],
-                f"Extreme Volume Spike ({data['VolumeRatio'].iloc[i]:.2f}x)",
-            )
+            # Check if all candles after the spike are bullish
+            all_bullish = True
+            for j in range(i + 1, len(data)):
+                if data["Close"].iloc[j] <= data["Open"].iloc[j]:
+                    all_bullish = False
+                    break
+
+            if all_bullish:
+                return (
+                    data.iloc[i : len(data)],  # Include all candles after the spike
+                    f"Extreme Volume Spike ({data['VolumeRatio'].iloc[i]:.2f}x) with Bullish Follow-through",
+                )
 
     return None
 
@@ -299,6 +312,28 @@ def identify_sustained_volume_increase(data, today_only, threshold=3, days=3):
     return None
 
 
+def identify_waking_giant(data, days=3, volume_threshold=5):
+    if (
+        len(data) < 20 + days
+    ):  # We need at least 20 days for a reliable average, plus the days for sustained increase
+        return None
+
+    data["AvgVolume"] = data["Volume"].rolling(window=20).mean()
+    data["VolumeRatio"] = data["Volume"] / data["AvgVolume"]
+
+    for i in range(len(data) - days, 20, -1):
+        if all(data["VolumeRatio"].iloc[i : i + days] >= volume_threshold):
+            if all(
+                data["VolumeRatio"].iloc[:i] < volume_threshold
+            ):  # Check if volume was low before
+                return (
+                    data.iloc[i : i + days],
+                    f"Waking Giant (Volume {data['VolumeRatio'].iloc[i+days-1]:.2f}x average)",
+                )
+
+    return None
+
+
 def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_id):
     csv_file = "stocks.csv"
     if not os.path.exists(csv_file):
@@ -316,6 +351,29 @@ def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_
         print(f"Analyzing {ticker}...")
         try:
             data = get_stock_data(ticker, timeframe)
+
+            if "waking_giant" in patterns_to_find:
+                waking_giant_result = identify_waking_giant(data)
+                if waking_giant_result is not None:
+                    pattern, pattern_type = waking_giant_result
+                    latest_price = get_latest_price(ticker)
+                    patterns_found.append(
+                        (ticker, latest_price, pattern_type, pattern, float_shares)
+                    )
+                    print(f"{pattern_type} found for {ticker}")
+
+            if "candle_range" in data:
+                data_count = len(data)
+                flat_count = len(data[data["candle_range"] < 0.1])
+                if flat_count / data_count > 0.05:
+                    print(
+                        "Data count:",
+                        data_count,
+                        " Filtered len:",
+                        len(data[data["candle_range"] < 0.1]),
+                    )
+                    continue
+
             float_shares = get_stock_float(ticker)
 
             if "reversal" in patterns_to_find:
@@ -390,6 +448,7 @@ def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_
                     "green_after_long_red",
                     "extreme_volume_spike",
                     "sustained_volume_increase",
+                    "waking_giant",
                 ]
             ):
                 print(f"No specified patterns found for {ticker}")
@@ -499,6 +558,7 @@ if __name__ == "__main__":
             "green_after_long_red",
             "extreme_volume_spike",
             "sustained_volume_increase",
+            "waking_giant",
         ],
         default=[
             "reversal",
@@ -507,6 +567,7 @@ if __name__ == "__main__":
             "green_after_long_red",
             "extreme_volume_spike",
             "sustained_volume_increase",
+            "waking_giant",
         ],
         help="Specify patterns to look for (default: all patterns)",
     )
