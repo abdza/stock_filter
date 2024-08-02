@@ -29,18 +29,15 @@ def meets_criteria(hist):
     second_last_candle = hist.iloc[-2]
 
     if not is_bullish(last_candle):
-        print("Last candle not bullish")
         if (
             not is_bullish(second_last_candle)
             or candle_size(second_last_candle) <= large_candle_threshold
         ):
-            print("Second candle not bullish too or is too small")
             return False
 
     # Calculate percentage of candles with size > large_candle_threshold
     large_candles = sum(candle_size(candle) > 0.20 for _, candle in hist.iterrows())
     percentage_large = large_candles / len(hist) * 100
-    print("Perc large:", percentage_large)
 
     # Return True if more than 70% of candles are large
     return percentage_large > 70
@@ -64,16 +61,12 @@ def main():
     for symbol in input_stocks:
         try:
             # Download stock data
-            print("Testing ", symbol)
             stock = yf.Ticker(symbol)
             hist = stock.history(start=start_date, end=end_date)
 
             # Check if the stock meets our criteria
             if meets_criteria(hist):
-                print("Pass")
                 qualifying_stocks.append(symbol)
-            else:
-                print("Failed")
         except Exception as e:
             print(f"Error processing {symbol}: {e}")
 
