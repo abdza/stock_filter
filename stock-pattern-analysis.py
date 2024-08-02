@@ -356,6 +356,71 @@ def identify_big_bullish_candles(data, today_only, threshold=3):
     return None
 
 
+def identify_diverging_volume_spread(data, today_only, threshold=3):
+    if len(data) < 20:  # We need at least 20 days of data for reliable averages
+        return None
+
+    data["CandleSize"] = abs(data["Close"] - data["Open"])
+    data["AvgCandleSize"] = data["CandleSize"].rolling(window=20).mean()
+    data["CandleSizeRatio"] = data["CandleSize"] / data["AvgCandleSize"]
+
+    data["AvgVolume"] = data["Volume"].rolling(window=20).mean()
+    data["VolumeRatio"] = data["Volume"] / data["AvgVolume"]
+
+    start_index = len(data) - 3 if today_only else 0
+    for i in range(len(data) - 1, start_index - 1, -1):
+        candle_size_ratio = data["CandleSizeRatio"].iloc[i]
+        volume_ratio = data["VolumeRatio"].iloc[i]
+
+        if (candle_size_ratio < 1 and volume_ratio > threshold) or (
+            candle_size_ratio > threshold and volume_ratio < 1
+        ):
+            pattern_type = (
+                "Small Candle, High Volume"
+                if candle_size_ratio < 1
+                else "Large Candle, Low Volume"
+            )
+            return (
+                data.iloc[i : i + 1],
+                f"Diverging Volume Spread ({pattern_type}): Candle Size {candle_size_ratio:.2f}x, Volume {volume_ratio:.2f}x",
+            )
+
+    return None
+
+
+def identify_fading_volume(data, today_only, lookback=5, threshold=0.8):
+    if len(data) < lookback + 1:  # We need at least lookback + 1 days of data
+        return None
+
+    data["PriceChange"] = data["Close"] - data["Close"].shift(1)
+    data["CandleSize"] = abs(data["Close"] - data["Open"])
+
+    start_index = len(data) - 3 if today_only else lookback
+    for i in range(len(data) - 1, start_index - 1, -1):
+        price_trend = sum(data["PriceChange"].iloc[i - lookback + 1 : i + 1]) > 0
+        candle_size_trend = (
+            sum(
+                data["CandleSize"].iloc[i - lookback + 1 : i + 1]
+                > data["CandleSize"].iloc[i - lookback : i]
+            )
+            > lookback / 2
+        )
+        volume_trend = (
+            data["Volume"].iloc[i] < data["Volume"].iloc[i - lookback] * threshold
+        )
+
+        if (price_trend and candle_size_trend and volume_trend) or (
+            not price_trend and not candle_size_trend and volume_trend
+        ):
+            trend_type = "Bullish" if price_trend else "Bearish"
+            return (
+                data.iloc[i - lookback + 1 : i + 1],
+                f"Fading Volume ({trend_type}): Price and Candle Size {'Increasing' if price_trend else 'Decreasing'}, Volume Fading",
+            )
+
+    return None
+
+
 def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_id):
     csv_file = "stocks.csv"
     if not os.path.exists(csv_file):
@@ -413,6 +478,30 @@ def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_
                 if ma_result is not None:
                     pattern, pattern_type = ma_result
                     latest_price = get_latest_price(ticker)
+                    patterns_found.append(
+                        (ticker, latest_price, pattern_type, pattern, float_shares)
+                    )
+                    print(f"{pattern_type} found for {ticker}")
+
+            if "diverging_volume_spread" in patterns_to_find:
+                diverging_volume_result = identify_diverging_volume_spread(
+                    data, today_only
+                )
+                if diverging_volume_result is not None:
+                    pattern, pattern_type = diverging_volume_result
+                    latest_price = get_latest_price(ticker)
+                    float_shares = get_stock_float(ticker)
+                    patterns_found.append(
+                        (ticker, latest_price, pattern_type, pattern, float_shares)
+                    )
+                    print(f"{pattern_type} found for {ticker}")
+
+            if "fading_volume" in patterns_to_find:
+                fading_volume_result = identify_fading_volume(data, today_only)
+                if fading_volume_result is not None:
+                    pattern, pattern_type = fading_volume_result
+                    latest_price = get_latest_price(ticker)
+                    float_shares = get_stock_float(ticker)
                     patterns_found.append(
                         (ticker, latest_price, pattern_type, pattern, float_shares)
                     )
@@ -483,6 +572,8 @@ def main(timeframe, today_only, patterns_to_find, telegram_token, telegram_chat_
                     "sustained_volume_increase",
                     "waking_giant",
                     "big_bullish_candles",
+                    "diverging_volume_spread",
+                    "fading_volume",
                 ]
             ):
                 print(f"No specified patterns found for {ticker}")
@@ -594,6 +685,8 @@ if __name__ == "__main__":
             "sustained_volume_increase",
             "waking_giant",
             "big_bullish_candles",
+            "diverging_volume_spread",
+            "fading_volume",
         ],
         default=[
             "reversal",
@@ -604,6 +697,8 @@ if __name__ == "__main__":
             "sustained_volume_increase",
             "waking_giant",
             "big_bullish_candles",
+            "diverging_volume_spread",
+            "fading_volume",
         ],
         help="Specify patterns to look for (default: all patterns)",
     )
