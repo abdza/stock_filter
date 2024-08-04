@@ -33,7 +33,8 @@ def meets_criteria(hist):
             not is_bullish(second_last_candle)
             or candle_size(second_last_candle) <= large_candle_threshold
         ):
-            return False
+            print("Not bullish")
+            # return False
 
     # Calculate percentage of candles with size > large_candle_threshold
     large_candles = sum(candle_size(candle) > 0.20 for _, candle in hist.iterrows())
@@ -49,7 +50,13 @@ def main():
     with open("completestocks.csv", "r") as file:
         csv_reader = csv.DictReader(file)
         for row in csv_reader:
-            input_stocks.append(row["Symbol"])
+            input_stocks.append(
+                {
+                    "Symbol": row["Symbol"],
+                    "Sector": row.get("Sector", ""),
+                    "Analyst Rating": row.get("Analyst Rating", ""),
+                }
+            )
 
     # Get current date and date one month ago
     end_date = datetime.now()
@@ -58,7 +65,8 @@ def main():
     qualifying_stocks = []
 
     # Loop through stocks
-    for symbol in input_stocks:
+    for stock_info in input_stocks:
+        symbol = stock_info["Symbol"]
         try:
             # Download stock data
             stock = yf.Ticker(symbol)
@@ -66,16 +74,28 @@ def main():
 
             # Check if the stock meets our criteria
             if meets_criteria(hist):
-                qualifying_stocks.append(symbol)
+                last_candle = hist.iloc[-1]
+                last_candle_size = candle_size(last_candle)
+                stock_info["Last Candle Size"] = last_candle_size
+                qualifying_stocks.append(stock_info)
         except Exception as e:
             print(f"Error processing {symbol}: {e}")
 
     # Write qualifying stocks to output CSV
     with open("stocks.csv", "w", newline="") as file:
         csv_writer = csv.writer(file)
-        csv_writer.writerow(["Symbol"])  # Header
-        for symbol in qualifying_stocks:
-            csv_writer.writerow([symbol])
+        csv_writer.writerow(
+            ["Symbol", "Sector", "Analyst Rating", "Last Candle Size"]
+        )  # Header
+        for stock_info in qualifying_stocks:
+            csv_writer.writerow(
+                [
+                    stock_info["Symbol"],
+                    stock_info["Sector"],
+                    stock_info["Analyst Rating"],
+                    stock_info["Last Candle Size"],
+                ]
+            )
 
     print(
         f"Analysis complete. {len(qualifying_stocks)} qualifying stocks written to stocks.csv"
