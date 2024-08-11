@@ -3,3 +3,6 @@ pandas
 scikit-learn
 numpy
 python-telegram-bot
+argparse
+tqdm
+pytz
