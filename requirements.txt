@@ -6,3 +6,5 @@ python-telegram-bot
 argparse
 tqdm
 pytz
+hmmlearn
+matplotlib
