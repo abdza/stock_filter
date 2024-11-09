@@ -8,3 +8,5 @@ tqdm
 pytz
 hmmlearn
 matplotlib
+openpyxl
+pandas_ta

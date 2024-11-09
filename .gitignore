@@ -167,3 +167,5 @@ penny_stocks.csv
 send_message.sh
 send_perfect.sh
 *.png
+*.csv
+*.xlsx
